@@ -179,7 +179,7 @@ if __name__ == '__main__':
     # تشغيل خادم الويب في الخلفية
     keep_alive()
     
-    TOKEN = "ضع_توكين_تليجرام_هنا"
+    TOKEN = "8718346069:AAHWbPMhPLiOMOtM_zGUZZjWg133U5EtyE0"
     
     app = ApplicationBuilder().token(TOKEN).build()
     
