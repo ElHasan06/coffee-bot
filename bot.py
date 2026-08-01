@@ -27,9 +27,12 @@ def get_sheets():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
     client = gspread.authorize(creds)
-    spreadsheet = client.open("ديون الكافيه")
     
-    debts_sheet = spreadsheet.worksheet("الديون الإجمالية")
+    # التعديل هنا: تغيير اسم الملف إلى كفي الشرفا
+    spreadsheet = client.open("كفي الشرفا")
+    
+    # تأكد أن اسم ورقة العمل بالأسفل يطابق اسم Tab الورقة في شيت جوجل
+    debts_sheet = spreadsheet.worksheet("الديون الإجمالية") 
     log_sheet = spreadsheet.worksheet("سجل الحركات")
     return debts_sheet, log_sheet
 
