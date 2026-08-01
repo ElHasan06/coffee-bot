@@ -49,7 +49,7 @@ def build_names_keyboard():
     try:
         debts_sheet, _ = get_sheets()
         records = debts_sheet.get_all_records()
-        names = [str(rec['الاسم']).strip() for rec in records if str(rec['الاسم']).strip()]
+        names = [str(rec['الإسم']).strip() for rec in records if str(rec['الإسم']).strip()]
     except Exception:
         names = []
 
