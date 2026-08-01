@@ -79,62 +79,69 @@ def wallet_keyboard():
         [KeyboardButton("عبود جوال بي")],
         [KeyboardButton("طارق محفظة")],
         [KeyboardButton("طارق جوال بي")],
-        [KeyboardButton("❌ إلغاء العملية")]
+        [KeyboardButton("🔙 رجوع")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def back_only_keyboard():
+    keyboard = [
+        [KeyboardButton("🔙 رجوع")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def build_names_keyboard():
     error_msg = None
+    names = []
     try:
         total_debts_sheet, _, _ = get_sheets()
         col_values = total_debts_sheet.col_values(1)
         names = [val.strip() for val in col_values if val.strip() and val.strip() not in ["الاسم", "الإسم"]]
     except Exception as e:
-        names = []
         error_msg = str(e)
 
     keyboard = []
     for name in names:
         keyboard.append([KeyboardButton(f"👤 {name}")])
         
-    # إضافة زر إضافة إسم وزر الإلغاء في نهاية قائمة الأسماء
+    # إضافة زر "إضافة إسم" ثم زر "رجوع" تحت الأسماء مباشرة
     keyboard.append([KeyboardButton("➕ إضافة إسم")])
-    keyboard.append([KeyboardButton("❌ إلغاء العملية")])
+    keyboard.append([KeyboardButton("🔙 رجوع")])
     
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True), error_msg, len(names)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True), error_msg
 
 # --- 3. الأوامر العامة ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     await update.message.reply_text(
         "مرحباً بك! اختر العملية المطلوبة من الأسفل:",
         reply_markup=main_menu_keyboard()
     )
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cancel_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text("تم إلغاء العملية.", reply_markup=main_menu_keyboard())
+    await update.message.reply_text("تم العودة للقائمة الرئيسية.", reply_markup=main_menu_keyboard())
     return ConversationHandler.END
 
 # --- 4. محادثة [➕ إضافة دين] ---
 
 async def start_add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    names_markup, err, _ = build_names_keyboard()
+    names_markup, err = build_names_keyboard()
     if err:
         await update.message.reply_text(f"❌ حدث خطأ في الاتصال بجوجل شيت:\n`{err}`", parse_mode='Markdown')
         return ConversationHandler.END
     
-    await update.message.reply_text("📋 (إضافة دين) اختر اسم الزبون أو اضغط على إضافة إسم:", reply_markup=names_markup)
+    await update.message.reply_text("📋 (إضافة دين) اختر اسم الزبون من القائمة:", reply_markup=names_markup)
     return ADD_WAITING_FOR_NAME
 
 async def add_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     
-    if text == "❌ إلغاء العملية":
-        return await cancel(update, context)
+    if text == "🔙 رجوع":
+        return await cancel_to_main(update, context)
         
     if text == "➕ إضافة إسم":
-        await update.message.reply_text("✍️ أدخل **اسم الزبون الجديد** لإنشائه في الشيت:", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text("✍️ أدخل **اسم الزبون الجديد** لإنشائه في الشيت:", parse_mode='Markdown', reply_markup=back_only_keyboard())
         return ADD_WAITING_FOR_NEW_NAME
 
     selected_name = text.replace("👤 ", "").strip()
@@ -143,28 +150,31 @@ async def add_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👤 الزبون: **{selected_name}**\n\n💵 أدخل **مبلغ الدين**:",
         parse_mode='Markdown',
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=back_only_keyboard()
     )
     return ADD_WAITING_FOR_AMOUNT
 
 async def add_save_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_name = update.message.text.strip()
     
+    if new_name == "🔙 رجوع":
+        return await start_add_debt(update, context)
+        
     if not new_name:
         await update.message.reply_text("⚠️ يرجى إدخال اسم صحيح:")
         return ADD_WAITING_FOR_NEW_NAME
 
-    await update.message.reply_text("⏳ جاري إضافة الزبون الجديد في صفحة الديون الإجمالية...")
+    await update.message.reply_text("⏳ جاري إضافة الزبون الجديد...")
     
     try:
         total_sheet, _, _ = get_sheets()
-        # إضافة الاسم مع دين ابتدائي 0
         total_sheet.append_row([new_name, 0])
         
         context.user_data['selected_name'] = new_name
         await update.message.reply_text(
             f"✅ تم إضافة الزبون **{new_name}** بنجاح!\n\n💵 الآن أدخل **مبلغ الدين** له:",
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            reply_markup=back_only_keyboard()
         )
         return ADD_WAITING_FOR_AMOUNT
     except Exception as e:
@@ -172,21 +182,37 @@ async def add_save_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
 async def add_process_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    
+    if text == "🔙 رجوع":
+        return await start_add_debt(update, context)
+
     try:
-        amount = float(update.message.text.strip())
+        amount = float(text)
         context.user_data['amount'] = amount
     except ValueError:
-        await update.message.reply_text("⚠️ يرجى إدخال رقم صحيح للمبلغ:")
+        await update.message.reply_text("⚠️ يرجى إدخال رقم صحيح للمبلغ:", reply_markup=back_only_keyboard())
         return ADD_WAITING_FOR_AMOUNT
 
     await update.message.reply_text(
         "📝 أدخل **نوع الدين** (الوصف):\n\nمثال: `5 قهوة + 2 بلياردو`",
-        parse_mode='Markdown'
+        parse_mode='Markdown',
+        reply_markup=back_only_keyboard()
     )
     return ADD_WAITING_FOR_TYPE
 
 async def add_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     item_type = update.message.text.strip()
+    
+    if item_type == "🔙 رجوع":
+        name = context.user_data.get('selected_name', '')
+        await update.message.reply_text(
+            f"👤 الزبون: **{name}**\n\n💵 أدخل **مبلغ الدين**:",
+            parse_mode='Markdown',
+            reply_markup=back_only_keyboard()
+        )
+        return ADD_WAITING_FOR_AMOUNT
+
     name = context.user_data.get('selected_name')
     amount = context.user_data.get('amount')
     current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -232,22 +258,22 @@ async def add_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- 5. محادثة [💳 سداد دين] ---
 
 async def start_pay_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    names_markup, err, _ = build_names_keyboard()
+    names_markup, err = build_names_keyboard()
     if err:
         await update.message.reply_text(f"❌ حدث خطأ في الاتصال بجوجل شيت:\n`{err}`", parse_mode='Markdown')
         return ConversationHandler.END
     
-    await update.message.reply_text("💳 (سداد دين) اختر اسم الزبون أو اضغط على إضافة إسم:", reply_markup=names_markup)
+    await update.message.reply_text("💳 (سداد دين) اختر اسم الزبون من القائمة:", reply_markup=names_markup)
     return PAY_WAITING_FOR_NAME
 
 async def pay_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     
-    if text == "❌ إلغاء العملية":
-        return await cancel(update, context)
+    if text == "🔙 رجوع":
+        return await cancel_to_main(update, context)
 
     if text == "➕ إضافة إسم":
-        await update.message.reply_text("✍️ أدخل **اسم الزبون الجديد** لإنشائه في الشيت:", parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text("✍️ أدخل **اسم الزبون الجديد** لإنشائه في الشيت:", parse_mode='Markdown', reply_markup=back_only_keyboard())
         return PAY_WAITING_FOR_NEW_NAME
         
     selected_name = text.replace("👤 ", "").strip()
@@ -256,18 +282,21 @@ async def pay_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👤 الزبون: **{selected_name}**\n\n💵 أدخل **مبلغ السداد**:",
         parse_mode='Markdown',
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=back_only_keyboard()
     )
     return PAY_WAITING_FOR_AMOUNT
 
 async def pay_save_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_name = update.message.text.strip()
     
+    if new_name == "🔙 رجوع":
+        return await start_pay_debt(update, context)
+
     if not new_name:
         await update.message.reply_text("⚠️ يرجى إدخال اسم صحيح:")
         return PAY_WAITING_FOR_NEW_NAME
 
-    await update.message.reply_text("⏳ جاري إضافة الزبون الجديد في صفحة الديون الإجمالية...")
+    await update.message.reply_text("⏳ جاري إضافة الزبون الجديد...")
     
     try:
         total_sheet, _, _ = get_sheets()
@@ -276,7 +305,8 @@ async def pay_save_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['selected_name'] = new_name
         await update.message.reply_text(
             f"✅ تم إضافة الزبون **{new_name}** بنجاح!\n\n💵 الآن أدخل **مبلغ السداد** له:",
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            reply_markup=back_only_keyboard()
         )
         return PAY_WAITING_FOR_AMOUNT
     except Exception as e:
@@ -284,11 +314,16 @@ async def pay_save_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
 async def pay_process_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    
+    if text == "🔙 رجوع":
+        return await start_pay_debt(update, context)
+
     try:
-        amount = float(update.message.text.strip())
+        amount = float(text)
         context.user_data['amount'] = amount
     except ValueError:
-        await update.message.reply_text("⚠️ يرجى إدخال رقم صحيح للمبلغ:")
+        await update.message.reply_text("⚠️ يرجى إدخال رقم صحيح للمبلغ:", reply_markup=back_only_keyboard())
         return PAY_WAITING_FOR_AMOUNT
 
     await update.message.reply_text(
@@ -299,8 +334,15 @@ async def pay_process_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def pay_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wallet = update.message.text.strip()
-    if wallet == "❌ إلغاء العملية":
-        return await cancel(update, context)
+    
+    if wallet == "🔙 رجوع":
+        name = context.user_data.get('selected_name', '')
+        await update.message.reply_text(
+            f"👤 الزبون: **{name}**\n\n💵 أدخل **مبلغ السداد**:",
+            parse_mode='Markdown',
+            reply_markup=back_only_keyboard()
+        )
+        return PAY_WAITING_FOR_AMOUNT
 
     name = context.user_data.get('selected_name')
     amount = context.user_data.get('amount')
@@ -367,8 +409,7 @@ if __name__ == '__main__':
             ADD_WAITING_FOR_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_save_final)],
         },
         fallbacks=[
-            CommandHandler("cancel", cancel),
-            MessageHandler(filters.Regex("^❌ إلغاء العملية$"), cancel)
+            CommandHandler("start", start)
         ]
     )
 
@@ -382,8 +423,7 @@ if __name__ == '__main__':
             PAY_WAITING_FOR_WALLET: [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_save_final)],
         },
         fallbacks=[
-            CommandHandler("cancel", cancel),
-            MessageHandler(filters.Regex("^❌ إلغاء العملية$"), cancel)
+            CommandHandler("start", start)
         ]
     )
     
