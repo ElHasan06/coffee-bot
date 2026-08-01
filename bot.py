@@ -73,16 +73,6 @@ def main_menu_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-def wallet_keyboard():
-    keyboard = [
-        [KeyboardButton("عبود محفظة")],
-        [KeyboardButton("عبود جوال بي")],
-        [KeyboardButton("طارق محفظة")],
-        [KeyboardButton("طارق جوال بي")],
-        [KeyboardButton("🔙 رجوع")]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
 def back_only_keyboard():
     keyboard = [
         [KeyboardButton("🔙 رجوع")]
@@ -103,7 +93,6 @@ def build_names_keyboard():
     for name in names:
         keyboard.append([KeyboardButton(f"👤 {name}")])
         
-    # زر رجوع فقط في النهاية بدون إضافة اسم
     keyboard.append([KeyboardButton("🔙 رجوع")])
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True), error_msg
@@ -264,9 +253,9 @@ async def pay_process_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return PAY_WAITING_FOR_AMOUNT
 
     await update.message.reply_text(
-        "📲 **تم التحويل من محفظة؟**\n(اختر من الأزرار أو اكتب الاسم):",
+        "✍️ **تم التحويل من محفظة؟**\n(أدخل الاسم كتابةً):",
         parse_mode='Markdown',
-        reply_markup=wallet_keyboard()
+        reply_markup=back_only_keyboard()
     )
     return PAY_WAITING_FOR_FROM_WALLET
 
@@ -285,9 +274,9 @@ async def pay_process_from_wallet(update: Update, context: ContextTypes.DEFAULT_
     context.user_data['from_wallet'] = from_wallet
 
     await update.message.reply_text(
-        "📥 **تم التحويل إلى محفظة؟**\n(اختر من الأزرار أو اكتب الاسم):",
+        "✍️ **تم التحويل إلى محفظة؟**\n(أدخل الاسم كتابةً):",
         parse_mode='Markdown',
-        reply_markup=wallet_keyboard()
+        reply_markup=back_only_keyboard()
     )
     return PAY_WAITING_FOR_TO_WALLET
 
@@ -296,9 +285,9 @@ async def pay_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if to_wallet == "🔙 رجوع":
         await update.message.reply_text(
-            "📲 **تم التحويل من محفظة؟**\n(اختر من الأزرار أو اكتب الاسم):",
+            "✍️ **تم التحويل من محفظة؟**\n(أدخل الاسم كتابةً):",
             parse_mode='Markdown',
-            reply_markup=wallet_keyboard()
+            reply_markup=back_only_keyboard()
         )
         return PAY_WAITING_FOR_FROM_WALLET
 
