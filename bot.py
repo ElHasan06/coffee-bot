@@ -4,9 +4,19 @@ from threading import Thread
 from datetime import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+    ConversationHandler,
+)
 from flask import Flask
+
+# --- مراحل المحادثة (Conversation States) ---
+WAITING_FOR_AMOUNT, WAITING_FOR_TYPE = range(2)
 
 # --- 0. سيرفر وهمي لتشغيل البوت على Render مجاناً ---
 web_app = Flask('')
@@ -23,23 +33,19 @@ def keep_alive():
     t = Thread(target=run_flask)
     t.start()
 
-# --- 1. الإتصال بجوجل شيت (معدّل للعمل بأمان عبر Environment Variable) ---
+# --- 1. الإتصال بجوجل شيت ---
 def get_sheets():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
-    # القراءة من متغيرة البيئة الآمنة على Render
     if "GOOGLE_CREDENTIALS" in os.environ:
         creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     else:
-        # قراءة محلية للتشغيل التجريبي على اللابتوب
         creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
         
     client = gspread.authorize(creds)
-    
     spreadsheet = client.open("كفي الشرفا")
     
-    # الورقة الأولى للديون الإجمالية
     debts_sheet = spreadsheet.get_worksheet(0) 
     
     try:
@@ -49,7 +55,7 @@ def get_sheets():
         
     return debts_sheet, log_sheet
 
-# --- 2. لوحات الأزرار بعرض الشاشة ---
+# --- 2. لوحات الأزرار ---
 
 def main_menu_keyboard():
     keyboard = [
@@ -57,7 +63,6 @@ def main_menu_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# بناء لوحة الأسماء من العمود A المباشر
 def build_names_keyboard():
     error_msg = None
     try:
@@ -69,15 +74,13 @@ def build_names_keyboard():
         error_msg = str(e)
 
     keyboard = []
-    
     for name in names:
         keyboard.append([KeyboardButton(f"👤 {name}")])
         
-    keyboard.append([KeyboardButton("🔙 القائمة الرئيسية")])
-    
+    keyboard.append([KeyboardButton("❌ إلغاء العملية")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True), error_msg, len(names)
 
-# --- 3. الأوامر ووظائف البوت ---
+# --- 3. دالّات المحادثة والتشغيل ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -85,55 +88,81 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# 1️⃣ البدء واختيار الاسم
+async def start_add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    names_markup, err, count = build_names_keyboard()
+    
+    if err:
+        await update.message.reply_text(f"❌ حدث خطأ في الاتصال بجوجل شيت:\n`{err}`", parse_mode='Markdown')
+        return ConversationHandler.END
+    elif count == 0:
+        await update.message.reply_text("⚠️ لم يتم العثور على أي أسماء في العمود A داخل الشيت!", reply_markup=names_markup)
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text("📋 اختر اسم الزبون من القائمة:", reply_markup=names_markup)
+        return WAITING_FOR_AMOUNT
+
+# 2️⃣ استقبال المبلغ والطلب للنوع
+async def process_name_and_ask_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     
-    if text == "➕ إضافة دين":
-        names_markup, err, count = build_names_keyboard()
+    if text == "❌ إلغاء العملية":
+        await update.message.reply_text("تم إلغاء العملية.", reply_markup=main_menu_keyboard())
+        return ConversationHandler.END
         
-        if err:
-            await update.message.reply_text(f"❌ حدث خطأ في الاتصال بجوجل شيت:\n`{err}`", parse_mode='Markdown')
-        elif count == 0:
-            await update.message.reply_text("⚠️ لم يتم العثور على أي أسماء في العمود A داخل الشيت!", reply_markup=names_markup)
-        else:
-            await update.message.reply_text("📋 اختر اسم الزبون من القائمة:", reply_markup=names_markup)
-        
-    elif text == "🔙 القائمة الرئيسية":
-        await update.message.reply_text(
-            "تم العودة للقائمة الرئيسية:",
-            reply_markup=main_menu_keyboard()
-        )
-        
-    elif text.startswith("👤 "):
-        selected_name = text.replace("👤 ", "").strip()
-        msg = (
-            f"✍️ **إضافة دين لـ ({selected_name}):**\n\n"
-            f"انسخ الأمر وعدّل عليه المبلغ والوصف ثم أرسله:\n"
-            f"`/add {selected_name} 2 قهوة 10`"
-        )
-        await update.message.reply_text(msg, parse_mode='Markdown')
+    selected_name = text.replace("👤 ", "").strip()
+    context.user_data['selected_name'] = selected_name
+    
+    await update.message.reply_text(
+        f"👤 الزبون: **{selected_name}**\n\n💵 أدخل **مبلغ الدين** (أرقام فقط):",
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return WAITING_FOR_TYPE
 
-async def add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# 3️⃣ استقبال النوع وحفظ البيانات بالكامل في Google Sheet
+async def process_amount_and_ask_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    amount_text = update.message.text.strip()
+    
+    # التأكد أن الادخال رقم
     try:
-        if len(context.args) < 3:
-            raise IndexError
+        amount = float(amount_text)
+        context.user_data['amount'] = amount
+    except ValueError:
+        await update.message.reply_text("⚠️ يرجى إدخال رقم صحيح للمبلغ (مثال: 15 أو 10.5):")
+        return WAITING_FOR_TYPE
 
-        name = context.args[0].strip().lower()
-        amount = float(context.args[-1])
-        item_description = " ".join(context.args[1:-1])
-        date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    await update.message.reply_text(
+        "📝 أدخل **نوع الدين** (الوصف):\n\nمثال: `5 قهوة + 2 بلياردو`",
+        parse_mode='Markdown'
+    )
+    return 3 # انتقال لخطوة الحفظ النهائي
 
+async def save_debt_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    item_type = update.message.text.strip()
+    name = context.user_data.get('selected_name')
+    amount = context.user_data.get('amount')
+    
+    # جلب الوقت والتاريخ الحالي من الجهاز
+    current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    await update.message.reply_text("⏳ جاري حفظ البيانات في جوجل شيت...")
+
+    try:
         debts_sheet, log_sheet = get_sheets()
         
+        # 1. إضافة الحركة في ورقة "سجل الحركات" (الاسم، النوع، المبلغ، التاريخ)
         try:
-            log_sheet.append_row([name, item_description, amount, date_str])
-        except Exception:
-            pass
+            log_sheet.append_row([name, item_type, amount, current_date])
+        except Exception as e:
+            print(f"Log sheet error: {e}")
 
+        # 2. تحديث المجموع في الورقة الرئيسية
         col_values = [v.lower() for v in debts_sheet.col_values(1)]
+        search_name = name.lower()
         
-        if name in col_values:
-            row_index = col_values.index(name) + 1
+        if search_name in col_values:
+            row_index = col_values.index(search_name) + 1
             cell_val = debts_sheet.cell(row_index, 2).value
             current_amount = float(cell_val) if cell_val else 0.0
             new_amount = current_amount + amount
@@ -141,18 +170,31 @@ async def add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             new_amount = amount
             debts_sheet.append_row([name, new_amount])
-            
+
         await update.message.reply_text(
-            f"✅ تم إضافة **({item_description})** بقيمة **{amount}** على الزبون **{name}**.\n"
-            f"💰 إجمالي الدين الحالي: **{new_amount}**", 
+            f"✅ **تم الحفظ بنجاح!**\n\n"
+            f"👤 **الاسم:** {name}\n"
+            f"💵 **المبلغ:** {amount}\n"
+            f"📝 **النوع:** {item_type}\n"
+            f"📅 **التاريخ:** {current_date}\n\n"
+            f"💰 **إجمالي الدين الحالي:** {new_amount}",
             parse_mode='Markdown',
             reply_markup=main_menu_keyboard()
         )
-    except (IndexError, ValueError):
-        await update.message.reply_text("⚠️ طريقة الاستخدام الخاطئة!\nالشكل الصحيح: `/add عبود الشرفا 2 كاسة قهوة 10`", parse_mode='Markdown')
     except Exception as e:
-        await update.message.reply_text(f"❌ حدث خطأ: {e}")
+        await update.message.reply_text(f"❌ حدث خطأ أثناء الحفظ: {e}", reply_markup=main_menu_keyboard())
 
+    # إخلاء البيانات المؤقتة
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# دالة إلغاء المحادثة في أي وقت
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text("تم إلغاء العملية.", reply_markup=main_menu_keyboard())
+    return ConversationHandler.END
+
+# --- 4. التسديد السريع ---
 async def pay_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         name = context.args[0].strip().lower()
@@ -185,11 +227,11 @@ async def pay_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ الزبون **{name}** غير موجود في قائمة الديون.", parse_mode='Markdown')
             
     except (IndexError, ValueError):
-        await update.message.reply_text("⚠️ طريقة الاستخدام الخاطئة!\nالشكل الصحيح: `/pay عبود الشرفا 5`", parse_mode='Markdown')
+        await update.message.reply_text("⚠️ طريقة الاستخدام:\n`/pay الاسم المبلغ`", parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"❌ حدث خطأ: {e}")
 
-# --- 4. التشغيل ---
+# --- 5. التشغيل الرئيسي ---
 if __name__ == '__main__':
     keep_alive()
     
@@ -197,11 +239,23 @@ if __name__ == '__main__':
     
     app = ApplicationBuilder().token(TOKEN).build()
     
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("add", add_debt))
-    app.add_handler(CommandHandler("pay", pay_debt))
+    # معالج خطوات المحادثة (إضافة الدين)
+    add_debt_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^➕ إضافة دين$"), start_add_debt)],
+        states={
+            WAITING_FOR_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_name_and_ask_amount)],
+            WAITING_FOR_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_amount_and_ask_type)],
+            3: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_debt_final)],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            MessageHandler(filters.Regex("^❌ إلغاء العملية$"), cancel)
+        ]
+    )
     
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("pay", pay_debt))
+    app.add_handler(add_debt_conv)
     
     print("البوت يعمل الآن...")
     app.run_polling()
