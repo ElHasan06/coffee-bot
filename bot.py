@@ -28,43 +28,47 @@ def get_sheets():
     creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
     client = gspread.authorize(creds)
     
+    # فتح الملف باسمه أو بالربط المباشر
     spreadsheet = client.open("كفي الشرفا")
     
-    debts_sheet = spreadsheet.worksheet("الديون الإجمالية")
-    log_sheet = spreadsheet.worksheet("سجل الحركات")
+    # استخدام الفهرس (Index 0) للورقة الأولى لضمان عدم حدوث خطأ في اسم الورقة
+    debts_sheet = spreadsheet.get_worksheet(0) 
+    
+    try:
+        log_sheet = spreadsheet.worksheet("سجل الحركات")
+    except Exception:
+        log_sheet = debts_sheet # كخطة بديلة إذا لم يجد الورقة الثانية
+        
     return debts_sheet, log_sheet
 
 # --- 2. لوحات الأزرار بعرض الشاشة ---
 
-# الزر الرئيسي الوحيد بعرض الشاشة
 def main_menu_keyboard():
     keyboard = [
         [KeyboardButton("➕ إضافة دين")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# قائمة الأسماء (جلب العمود A مباشرة لضمان ظهور جميع الأسماء)
+# دالة بناء الأزرار مع إرجاع الخطأ إن وجد
 def build_names_keyboard():
+    error_msg = None
     try:
         debts_sheet, _ = get_sheets()
-        # جلب كل القيم الموجودة في العمود الأول A
+        # جلب جميع قيم العمود الأول
         col_values = debts_sheet.col_values(1)
-        # استبعاد الترويسة "الاسم" أو "الإسم" والصفوف الفارغة
         names = [val.strip() for val in col_values if val.strip() and val.strip() not in ["الاسم", "الإسم"]]
     except Exception as e:
-        print(f"Error fetching names: {e}")
         names = []
+        error_msg = str(e)
 
     keyboard = []
     
-    # وضع كل اسم في زر منفصل بعرض الشاشة
     for name in names:
         keyboard.append([KeyboardButton(f"👤 {name}")])
         
-    # زر الرجوع للقائمة الرئيسية
     keyboard.append([KeyboardButton("🔙 القائمة الرئيسية")])
     
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True), error_msg, len(names)
 
 # --- 3. الأوامر ووظائف البوت ---
 
@@ -78,10 +82,14 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     
     if text == "➕ إضافة دين":
-        await update.message.reply_text(
-            "📋 اختر اسم الزبون من القائمة:",
-            reply_markup=build_names_keyboard()
-        )
+        names_markup, err, count = build_names_keyboard()
+        
+        if err:
+            await update.message.reply_text(f"❌ حدث خطأ في الاتصال بجوجل شيت:\n`{err}`", parse_mode='Markdown')
+        elif count == 0:
+            await update.message.reply_text("⚠️ لم يتم العثور على أي أسماء في العمود A داخل الشيت!", reply_markup=names_markup)
+        else:
+            await update.message.reply_text("📋 اختر اسم الزبون من القائمة:", reply_markup=names_markup)
         
     elif text == "🔙 القائمة الرئيسية":
         await update.message.reply_text(
@@ -109,11 +117,14 @@ async def add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         debts_sheet, log_sheet = get_sheets()
-        log_sheet.append_row([name, item_description, amount, date_str])
+        
+        try:
+            log_sheet.append_row([name, item_description, amount, date_str])
+        except Exception:
+            pass
 
         col_values = [v.lower() for v in debts_sheet.col_values(1)]
         
-        row_index = None
         if name in col_values:
             row_index = col_values.index(name) + 1
             cell_val = debts_sheet.cell(row_index, 2).value
@@ -150,7 +161,10 @@ async def pay_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_amount = float(cell_val) if cell_val else 0.0
             
             new_amount = current_amount - amount
-            log_sheet.append_row([name, "تسديد دفعة", -amount, date_str])
+            try:
+                log_sheet.append_row([name, "تسديد دفعة", -amount, date_str])
+            except Exception:
+                pass
             
             if new_amount <= 0:
                 debts_sheet.delete_rows(row_index)
@@ -168,54 +182,6 @@ async def pay_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ حدث خطأ: {e}")
 
-async def check_customer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        name = context.args[0].strip().lower()
-        debts_sheet, log_sheet = get_sheets()
-        
-        logs = log_sheet.get_all_records()
-        customer_logs = [l for l in logs if str(l.get('الاسم', '')).strip().lower() == name]
-        
-        if not customer_logs:
-            await update.message.reply_text(f"❌ لا يوجد أي سجلات أو ديون باسم **{name}**.", parse_mode='Markdown')
-            return
-
-        msg = f"🔍 **كشف حساب الزبون ({name}):**\n\n"
-        total = 0
-        for item in customer_logs:
-            msg += f"• {item.get('الوصف', '')} | {item.get('المبلغ', 0)} | ({item.get('التاريخ', '')})\n"
-            total += float(item.get('المبلغ', 0))
-            
-        msg += f"\n💰 **الصافي المتبقي عليه:** {total}"
-        await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=main_menu_keyboard())
-
-    except IndexError:
-        await update.message.reply_text("⚠️ يرجى كتابة اسم الزبون، مثال:\n`/check عبود الشرفا`", parse_mode='Markdown')
-    except Exception as e:
-        await update.message.reply_text(f"❌ حدث خطأ: {e}")
-
-async def list_debts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        debts_sheet, _ = get_sheets()
-        names = debts_sheet.col_values(1)[1:]
-        amounts = debts_sheet.col_values(2)[1:]
-        
-        if not names:
-            await update.message.reply_text("🎉 لا يوجد أي ديون مسجلة حالياً!", reply_markup=main_menu_keyboard())
-            return
-            
-        msg = "📋 **قائمة الديون الإجمالية:**\n\n"
-        total_all = 0
-        for n, a in zip(names, amounts):
-            val = float(a) if a else 0.0
-            msg += f"• **{n}**: {val}\n"
-            total_all += val
-            
-        msg += f"\n💰 **إجمالي الديون للجميع:** {total_all}"
-        await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=main_menu_keyboard())
-    except Exception as e:
-        await update.message.reply_text(f"❌ حدث خطأ: {e}")
-
 # --- 4. التشغيل ---
 if __name__ == '__main__':
     keep_alive()
@@ -227,10 +193,8 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("add", add_debt))
     app.add_handler(CommandHandler("pay", pay_debt))
-    app.add_handler(CommandHandler("check", check_customer))
-    app.add_handler(CommandHandler("list", list_debts))
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
     
-    print("البوت يعمل الآن بالتحديث المباشر للعمود A...")
+    print("البوت يعمل الآن بالتحديث المباشر...")
     app.run_polling()
