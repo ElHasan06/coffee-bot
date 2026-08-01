@@ -1,4 +1,5 @@
 import os
+import json
 from threading import Thread
 from datetime import datetime
 import gspread
@@ -22,22 +23,29 @@ def keep_alive():
     t = Thread(target=run_flask)
     t.start()
 
-# --- 1. الإتصال بجوجل شيت ---
+# --- 1. الإتصال بجوجل شيت (معدّل للعمل بأمان عبر Environment Variable) ---
 def get_sheets():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+    
+    # القراءة من متغيرة البيئة الآمنة على Render
+    if "GOOGLE_CREDENTIALS" in os.environ:
+        creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    else:
+        # قراءة محلية للتشغيل التجريبي على اللابتوب
+        creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+        
     client = gspread.authorize(creds)
     
-    # فتح الملف باسمه أو بالربط المباشر
     spreadsheet = client.open("كفي الشرفا")
     
-    # استخدام الفهرس (Index 0) للورقة الأولى لضمان عدم حدوث خطأ في اسم الورقة
+    # الورقة الأولى للديون الإجمالية
     debts_sheet = spreadsheet.get_worksheet(0) 
     
     try:
         log_sheet = spreadsheet.worksheet("سجل الحركات")
     except Exception:
-        log_sheet = debts_sheet # كخطة بديلة إذا لم يجد الورقة الثانية
+        log_sheet = debts_sheet
         
     return debts_sheet, log_sheet
 
@@ -49,12 +57,11 @@ def main_menu_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# دالة بناء الأزرار مع إرجاع الخطأ إن وجد
+# بناء لوحة الأسماء من العمود A المباشر
 def build_names_keyboard():
     error_msg = None
     try:
         debts_sheet, _ = get_sheets()
-        # جلب جميع قيم العمود الأول
         col_values = debts_sheet.col_values(1)
         names = [val.strip() for val in col_values if val.strip() and val.strip() not in ["الاسم", "الإسم"]]
     except Exception as e:
@@ -196,5 +203,5 @@ if __name__ == '__main__':
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
     
-    print("البوت يعمل الآن بالتحديث المباشر...")
+    print("البوت يعمل الآن...")
     app.run_polling()
