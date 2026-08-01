@@ -16,14 +16,17 @@ from telegram.ext import (
 from flask import Flask
 
 # --- مراحل المحادثات (Conversation States) ---
+# إضافة وارد
+INCOME_WAITING_FOR_NAME, INCOME_WAITING_FOR_AMOUNT, INCOME_WAITING_FOR_FROM_WALLET, INCOME_WAITING_FOR_TO_WALLET = range(4)
+
 # إضافة دين
-ADD_WAITING_FOR_NAME, ADD_WAITING_FOR_NEW_NAME, ADD_WAITING_FOR_AMOUNT, ADD_WAITING_FOR_TYPE = range(4)
+ADD_WAITING_FOR_NAME, ADD_WAITING_FOR_NEW_NAME, ADD_WAITING_FOR_AMOUNT, ADD_WAITING_FOR_TYPE = range(4, 8)
 
 # سداد دين
-PAY_WAITING_FOR_NAME, PAY_WAITING_FOR_AMOUNT, PAY_WAITING_FOR_FROM_WALLET, PAY_WAITING_FOR_TO_WALLET = range(4, 8)
+PAY_WAITING_FOR_NAME, PAY_WAITING_FOR_AMOUNT, PAY_WAITING_FOR_FROM_WALLET, PAY_WAITING_FOR_TO_WALLET = range(8, 12)
 
 # إضافة مصروف
-EXPENSE_WAITING_FOR_PERSON, EXPENSE_WAITING_FOR_AMOUNT, EXPENSE_WAITING_FOR_TYPE = range(8, 11)
+EXPENSE_WAITING_FOR_PERSON, EXPENSE_WAITING_FOR_AMOUNT, EXPENSE_WAITING_FOR_TYPE = range(12, 15)
 
 # --- 0. سيرفر وهمي لتشغيل البوت على Render مجاناً ---
 web_app = Flask('')
@@ -74,8 +77,13 @@ def get_sheets():
         expenses_sheet = spreadsheet.worksheet("المصروفات")
     except Exception:
         expenses_sheet = total_debts_sheet
+
+    try:
+        income_sheet = spreadsheet.worksheet("الوارد")
+    except Exception:
+        income_sheet = total_debts_sheet
         
-    return total_debts_sheet, debt_log_sheet, pay_log_sheet, summary_sheet, expenses_sheet
+    return total_debts_sheet, debt_log_sheet, pay_log_sheet, summary_sheet, expenses_sheet, income_sheet
 
 # دالة مساعدة لتحديث قيمة خلايا الإجمالي
 def update_summary_cell(sheet, cell_address, amount_delta):
@@ -92,6 +100,7 @@ def update_summary_cell(sheet, cell_address, amount_delta):
 
 def main_menu_keyboard():
     keyboard = [
+        [KeyboardButton("📥 إضافة وارد")],
         [KeyboardButton("➕ إضافة دين")],
         [KeyboardButton("💳 سداد دين")],
         [KeyboardButton("💸 إضافة مصروف")]
@@ -115,7 +124,7 @@ def build_names_keyboard(include_add_button=False):
     error_msg = None
     names = []
     try:
-        total_debts_sheet, _, _, _, _ = get_sheets()
+        total_debts_sheet, _, _, _, _, _ = get_sheets()
         col_values = total_debts_sheet.col_values(1)
         names = [val.strip() for val in col_values if val.strip() and val.strip() not in ["الاسم", "الإسم"]]
     except Exception as e:
@@ -146,7 +155,113 @@ async def cancel_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("تم العودة للقائمة الرئيسية.", reply_markup=main_menu_keyboard())
     return ConversationHandler.END
 
-# --- 4. محادثة [➕ إضافة دين] ---
+# --- 4. محادثة [📥 إضافة وارد] ---
+
+async def start_add_income(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📥 (إضافة وارد) أدخل **الاسم**:",
+        parse_mode='Markdown',
+        reply_markup=back_only_keyboard()
+    )
+    return INCOME_WAITING_FOR_NAME
+
+async def income_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = update.message.text.strip()
+    
+    if name == "🔙 رجوع":
+        return await cancel_to_main(update, context)
+
+    context.user_data['income_name'] = name
+    
+    await update.message.reply_text(
+        f"👤 الاسم: **{name}**\n\n💵 أدخل **المبلغ**:",
+        parse_mode='Markdown',
+        reply_markup=back_only_keyboard()
+    )
+    return INCOME_WAITING_FOR_AMOUNT
+
+async def income_process_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    
+    if text == "🔙 رجوع":
+        return await start_add_income(update, context)
+
+    try:
+        amount = float(text)
+        context.user_data['income_amount'] = amount
+    except ValueError:
+        await update.message.reply_text("⚠️ يرجى إدخال رقم صحيح للمبلغ:", reply_markup=back_only_keyboard())
+        return INCOME_WAITING_FOR_AMOUNT
+
+    await update.message.reply_text(
+        "✍️ **تم التحويل من محفظة؟**\n(أدخل الاسم كتابةً):",
+        parse_mode='Markdown',
+        reply_markup=back_only_keyboard()
+    )
+    return INCOME_WAITING_FOR_FROM_WALLET
+
+async def income_process_from_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from_wallet = update.message.text.strip()
+    
+    if from_wallet == "🔙 رجوع":
+        name = context.user_data.get('income_name', '')
+        await update.message.reply_text(
+            f"👤 الاسم: **{name}**\n\n💵 أدخل **المبلغ**:",
+            parse_mode='Markdown',
+            reply_markup=back_only_keyboard()
+        )
+        return INCOME_WAITING_FOR_AMOUNT
+
+    context.user_data['income_from_wallet'] = from_wallet
+
+    await update.message.reply_text(
+        "✍️ **تم التحويل إلى محفظة؟**\n(أدخل الاسم كتابةً):",
+        parse_mode='Markdown',
+        reply_markup=back_only_keyboard()
+    )
+    return INCOME_WAITING_FOR_TO_WALLET
+
+async def income_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    to_wallet = update.message.text.strip()
+    
+    if to_wallet == "🔙 رجوع":
+        await update.message.reply_text(
+            "✍️ **تم التحويل من محفظة؟**\n(أدخل الاسم كتابةً):",
+            parse_mode='Markdown',
+            reply_markup=back_only_keyboard()
+        )
+        return INCOME_WAITING_FOR_FROM_WALLET
+
+    name = context.user_data.get('income_name')
+    amount = context.user_data.get('income_amount')
+    from_wallet = context.user_data.get('income_from_wallet')
+    current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    await update.message.reply_text("⏳ جاري حفظ الوارد في جوجل شيت...")
+
+    try:
+        _, _, _, _, _, income_sheet = get_sheets()
+        
+        # حفظ البيانات في صفحة "الوارد" (الاسم، المبلغ، من محفظة، إلى محفظة، التاريخ)
+        income_sheet.append_row([name, amount, from_wallet, to_wallet, current_date])
+
+        await update.message.reply_text(
+            f"✅ **تم إضافة الوارد بنجاح!**\n\n"
+            f"👤 **الاسم:** {name}\n"
+            f"💵 **المبلغ:** {amount}\n"
+            f"📤 **من محفظة:** {from_wallet}\n"
+            f"📥 **إلى محفظة:** {to_wallet}\n"
+            f"📅 **التاريخ:** {current_date}",
+            parse_mode='Markdown',
+            reply_markup=main_menu_keyboard()
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ حدث خطأ أثناء الحفظ: {e}", reply_markup=main_menu_keyboard())
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# --- 5. محادثة [➕ إضافة دين] ---
 
 async def start_add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     names_markup, err = build_names_keyboard(include_add_button=True)
@@ -190,12 +305,11 @@ async def add_save_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ جاري إضافة الزبون الجديد في صفحة الديون الإجمالية...")
     
     try:
-        total_sheet, _, _, _, _ = get_sheets()
+        total_sheet, _, _, _, _, _ = get_sheets()
         total_sheet.append_row([new_name, 0])
         
         await update.message.reply_text(f"✅ تم إضافة الزبون **{new_name}** بنجاح!", parse_mode='Markdown')
         
-        # العودة مجدداً لاختيار الاسم مع القائمة المحدثة
         return await start_add_debt(update, context)
     except Exception as e:
         await update.message.reply_text(f"❌ حدث خطأ أثناء إضافة الاسم: {e}", reply_markup=main_menu_keyboard())
@@ -240,7 +354,7 @@ async def add_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ جاري حفظ البيانات في جوجل شيت...")
 
     try:
-        total_sheet, debt_log_sheet, _, summary_sheet, _ = get_sheets()
+        total_sheet, debt_log_sheet, _, summary_sheet, _, _ = get_sheets()
         
         # 1. حفظ في "سجل الديون"
         debt_log_sheet.append_row([name, amount, item_type, current_date])
@@ -278,7 +392,7 @@ async def add_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# --- 5. محادثة [💳 سداد دين] ---
+# --- 6. محادثة [💳 سداد دين] ---
 
 async def start_pay_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     names_markup, err = build_names_keyboard(include_add_button=False)
@@ -365,7 +479,7 @@ async def pay_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ جاري تسجيل عملية السداد...")
 
     try:
-        total_sheet, _, pay_log_sheet, summary_sheet, _ = get_sheets()
+        total_sheet, _, pay_log_sheet, summary_sheet, _, _ = get_sheets()
         
         # 1. حفظ في "سجل السداد"
         pay_log_sheet.append_row([name, amount, from_wallet, to_wallet, current_date])
@@ -409,7 +523,7 @@ async def pay_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# --- 6. محادثة [💸 إضافة مصروف] ---
+# --- 7. محادثة [💸 إضافة مصروف] ---
 
 async def start_add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -477,7 +591,7 @@ async def expense_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("⏳ جاري حفظ المصروف في جوجل شيت...")
 
     try:
-        _, _, _, summary_sheet, expenses_sheet = get_sheets()
+        _, _, _, summary_sheet, expenses_sheet, _ = get_sheets()
         
         # 1. تخزين في صفحة "المصروفات"
         expenses_sheet.append_row([person, amount, expense_type, current_date])
@@ -506,7 +620,7 @@ async def expense_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data.clear()
     return ConversationHandler.END
 
-# --- 7. التشغيل الرئيسي ---
+# --- 8. التشغيل الرئيسي ---
 if __name__ == '__main__':
     keep_alive()
     
@@ -514,6 +628,18 @@ if __name__ == '__main__':
     
     app = ApplicationBuilder().token(TOKEN).build()
     
+    # محادثة إضافة وارد
+    income_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^📥 إضافة وارد$"), start_add_income)],
+        states={
+            INCOME_WAITING_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, income_process_name)],
+            INCOME_WAITING_FOR_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, income_process_amount)],
+            INCOME_WAITING_FOR_FROM_WALLET: [MessageHandler(filters.TEXT & ~filters.COMMAND, income_process_from_wallet)],
+            INCOME_WAITING_FOR_TO_WALLET: [MessageHandler(filters.TEXT & ~filters.COMMAND, income_save_final)],
+        },
+        fallbacks=[CommandHandler("start", start)]
+    )
+
     # محادثة إضافة الدين
     add_debt_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^➕ إضافة دين$"), start_add_debt)],
@@ -550,6 +676,7 @@ if __name__ == '__main__':
     )
     
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(income_conv)
     app.add_handler(add_debt_conv)
     app.add_handler(pay_debt_conv)
     app.add_handler(expense_conv)
