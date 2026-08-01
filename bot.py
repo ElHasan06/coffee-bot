@@ -33,27 +33,9 @@ def get_sheets():
     log_sheet = spreadsheet.worksheet("سجل الحركات")
     return debts_sheet, log_sheet
 
-# --- 2. بناء الـ Reply Keyboard بالأسماء المكتوبة بالشيت ---
+# --- 2. بناء الـ Reply Keyboard بزر واحد ---
 def build_reply_keyboard():
-    try:
-        debts_sheet, _ = get_sheets()
-        records = debts_sheet.get_all_records()
-        names = [str(rec['الاسم']).strip() for rec in records if str(rec['الاسم']).strip()]
-    except Exception:
-        names = []
-
-    keyboard = []
-    
-    # صف الأزرار الرئيسية
-    keyboard.append([KeyboardButton("🔄 تحديث الأسماء"), KeyboardButton("📋 قائمة الديون الإجمالية")])
-    
-    # إضافة أزرار الأسماء (كل اسمين في سطر)
-    for i in range(0, len(names), 2):
-        row = [KeyboardButton(f"👤 {names[i]}")]
-        if i + 1 < len(names):
-            row.append(KeyboardButton(f"👤 {names[i+1]}"))
-        keyboard.append(row)
-        
+    keyboard = [[KeyboardButton("➕ إضافة دين")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # --- 3. الأوامر ووظائف البوت ---
@@ -68,20 +50,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     
-    if text == "🔄 تحديث الأسماء":
-        await update.message.reply_text("🔄 تم تحديث قائمة الأسماء!", reply_markup=build_reply_keyboard())
-        
-    elif text == "📋 قائمة الديون الإجمالية":
-        await list_debts(update, context)
-        
-    elif text.startswith("👤 "):
-        selected_name = text.replace("👤 ", "").strip()
+    if text == "➕ إضافة دين":
         msg = (
-            f"✍️ **إضافة دين لـ ({selected_name}):**\n\n"
-            f"انسخ الأمر وعدّل عليه المبلغ والوصف ثم أرسله:\n"
-            f"`/add {selected_name} 2 قهوة 10`"
+            "✍️ **إضافة دين جديد:**\n\n"
+            "يرجى إرسال رسالة تبدأ بـ `/add` متبوعة بالاسم والوصف والمبلغ.\n"
+            "**صيغة الأمر:**\n"
+            "`/add الاسم الوصف المبلغ`\n\n"
+            "*مثال:* `/add أحمد 2 قهوة 10`"
         )
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=build_reply_keyboard())
 
 async def add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
