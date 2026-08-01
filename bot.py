@@ -17,13 +17,13 @@ from flask import Flask
 
 # --- مراحل المحادثات (Conversation States) ---
 # إضافة دين
-ADD_WAITING_FOR_NAME, ADD_WAITING_FOR_AMOUNT, ADD_WAITING_FOR_TYPE = range(3)
+ADD_WAITING_FOR_NAME, ADD_WAITING_FOR_NEW_NAME, ADD_WAITING_FOR_AMOUNT, ADD_WAITING_FOR_TYPE = range(4)
 
 # سداد دين
-PAY_WAITING_FOR_NAME, PAY_WAITING_FOR_AMOUNT, PAY_WAITING_FOR_FROM_WALLET, PAY_WAITING_FOR_TO_WALLET = range(3, 7)
+PAY_WAITING_FOR_NAME, PAY_WAITING_FOR_AMOUNT, PAY_WAITING_FOR_FROM_WALLET, PAY_WAITING_FOR_TO_WALLET = range(4, 8)
 
 # إضافة مصروف
-EXPENSE_WAITING_FOR_PERSON, EXPENSE_WAITING_FOR_AMOUNT, EXPENSE_WAITING_FOR_TYPE = range(7, 10)
+EXPENSE_WAITING_FOR_PERSON, EXPENSE_WAITING_FOR_AMOUNT, EXPENSE_WAITING_FOR_TYPE = range(8, 11)
 
 # --- 0. سيرفر وهمي لتشغيل البوت على Render مجاناً ---
 web_app = Flask('')
@@ -77,7 +77,7 @@ def get_sheets():
         
     return total_debts_sheet, debt_log_sheet, pay_log_sheet, summary_sheet, expenses_sheet
 
-# دالة مساعدة لتحديث قيمة خلايا الإجمالي (إضافة أو خصم)
+# دالة مساعدة لتحديث قيمة خلايا الإجمالي
 def update_summary_cell(sheet, cell_address, amount_delta):
     cell_val = sheet.acell(cell_address).value
     try:
@@ -111,7 +111,7 @@ def back_only_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-def build_names_keyboard():
+def build_names_keyboard(include_add_button=False):
     error_msg = None
     names = []
     try:
@@ -124,6 +124,9 @@ def build_names_keyboard():
     keyboard = []
     for name in names:
         keyboard.append([KeyboardButton(f"👤 {name}")])
+        
+    if include_add_button:
+        keyboard.append([KeyboardButton("➕ إضافة إسم")])
         
     keyboard.append([KeyboardButton("🔙 رجوع")])
     
@@ -146,12 +149,12 @@ async def cancel_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- 4. محادثة [➕ إضافة دين] ---
 
 async def start_add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    names_markup, err = build_names_keyboard()
+    names_markup, err = build_names_keyboard(include_add_button=True)
     if err:
         await update.message.reply_text(f"❌ حدث خطأ في الاتصال بجوجل شيت:\n`{err}`", parse_mode='Markdown')
         return ConversationHandler.END
     
-    await update.message.reply_text("📋 (إضافة دين) اختر اسم الزبون من القائمة:", reply_markup=names_markup)
+    await update.message.reply_text("📋 (إضافة دين) اختر اسم الزبون من القائمة أو اضغط على إضافة إسم:", reply_markup=names_markup)
     return ADD_WAITING_FOR_NAME
 
 async def add_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -159,6 +162,10 @@ async def add_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if text == "🔙 رجوع":
         return await cancel_to_main(update, context)
+
+    if text == "➕ إضافة إسم":
+        await update.message.reply_text("✍️ أدخل **اسم الزبون الجديد** لإنشائه في الشيت:", parse_mode='Markdown', reply_markup=back_only_keyboard())
+        return ADD_WAITING_FOR_NEW_NAME
 
     selected_name = text.replace("👤 ", "").strip()
     context.user_data['selected_name'] = selected_name
@@ -169,6 +176,30 @@ async def add_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=back_only_keyboard()
     )
     return ADD_WAITING_FOR_AMOUNT
+
+async def add_save_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    new_name = update.message.text.strip()
+    
+    if new_name == "🔙 رجوع":
+        return await start_add_debt(update, context)
+        
+    if not new_name:
+        await update.message.reply_text("⚠️ يرجى إدخال اسم صحيح:", reply_markup=back_only_keyboard())
+        return ADD_WAITING_FOR_NEW_NAME
+
+    await update.message.reply_text("⏳ جاري إضافة الزبون الجديد في صفحة الديون الإجمالية...")
+    
+    try:
+        total_sheet, _, _, _, _ = get_sheets()
+        total_sheet.append_row([new_name, 0])
+        
+        await update.message.reply_text(f"✅ تم إضافة الزبون **{new_name}** بنجاح!", parse_mode='Markdown')
+        
+        # العودة مجدداً لاختيار الاسم مع القائمة المحدثة
+        return await start_add_debt(update, context)
+    except Exception as e:
+        await update.message.reply_text(f"❌ حدث خطأ أثناء إضافة الاسم: {e}", reply_markup=main_menu_keyboard())
+        return ConversationHandler.END
 
 async def add_process_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -250,7 +281,7 @@ async def add_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- 5. محادثة [💳 سداد دين] ---
 
 async def start_pay_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    names_markup, err = build_names_keyboard()
+    names_markup, err = build_names_keyboard(include_add_button=False)
     if err:
         await update.message.reply_text(f"❌ حدث خطأ في الاتصال بجوجل شيت:\n`{err}`", parse_mode='Markdown')
         return ConversationHandler.END
@@ -448,7 +479,7 @@ async def expense_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         _, _, _, summary_sheet, expenses_sheet = get_sheets()
         
-        # 1. تخزين في صفحة "المصروفات" (الإسم، المبلغ، النوع، التاريخ)
+        # 1. تخزين في صفحة "المصروفات"
         expenses_sheet.append_row([person, amount, expense_type, current_date])
 
         # 2. تحديث الخلية الخاصة بالشخص في صفحة "الإجمالي"
@@ -488,6 +519,7 @@ if __name__ == '__main__':
         entry_points=[MessageHandler(filters.Regex("^➕ إضافة دين$"), start_add_debt)],
         states={
             ADD_WAITING_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_process_name)],
+            ADD_WAITING_FOR_NEW_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_save_new_name)],
             ADD_WAITING_FOR_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_process_amount)],
             ADD_WAITING_FOR_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_save_final)],
         },
