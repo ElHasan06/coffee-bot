@@ -3,8 +3,8 @@ from threading import Thread
 from datetime import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 from flask import Flask
 
 # --- 0. سيرفر وهمي لتشغيل البوت على Render مجاناً ---
@@ -33,12 +33,19 @@ def get_sheets():
     log_sheet = spreadsheet.worksheet("سجل الحركات")
     return debts_sheet, log_sheet
 
-# --- 2. الأوامر ---
+# --- 2. لوحة الأزرار الرئيسية ---
+def main_keyboard():
+    keyboard = [
+        [KeyboardButton("📋 عرض قائمة الديون"), KeyboardButton("❓ التعليمات والتعليمات")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# --- 3. الأوامر ووظائف البوت ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "☕ **مرحباً بك في بوت إدارة ديون الكافيه**\n\n"
-        "الأوامر المتاحة:\n"
+        "يمكنك استخدام الأزرار في الأسفل أو كتابة الأوامر مباشرة:\n\n"
         "➕ `/add الاسم الوصف المبلغ` - إضافة دين مفصل\n"
         "   *مثال:* `/add أحمد 2 كاسة قهوة 10`\n\n"
         "➖ `/pay الاسم المبلغ` - خصم/تسديد مبلغ\n"
@@ -46,7 +53,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📋 `/list` - عرض قائمة جميع الديون الإجمالية\n"
         "🔍 `/check الاسم` - عرض كشف حساب مفصل لزبون معين"
     )
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+    await update.message.reply_text(help_text, parse_mode='Markdown', reply_markup=main_keyboard())
+
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text == "📋 عرض قائمة الديون":
+        await list_debts(update, context)
+    elif text == "❓ التعليمات والتعليمات":
+        await start(update, context)
 
 async def add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -81,7 +95,8 @@ async def add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ تم إضافة **({item_description})** بقيمة **{amount}** على الزبون **{name}**.\n"
             f"💰 إجمالي الدين الحالي: **{new_amount}**", 
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            reply_markup=main_keyboard()
         )
     except (IndexError, ValueError):
         await update.message.reply_text("⚠️ طريقة الاستخدام الخاطئة!\nالشكل الصحيح: `/add أحمد 2 كاسة قهوة 10`", parse_mode='Markdown')
@@ -117,7 +132,7 @@ async def pay_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 debts_sheet.update_cell(row_index, 2, new_amount)
                 msg = f"📉 تم خصم **{amount}** من **{name}**.\nالمتبقي عليه: **{new_amount}**"
                 
-            await update.message.reply_text(msg, parse_mode='Markdown')
+            await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=main_keyboard())
         else:
             await update.message.reply_text(f"❌ الزبون **{name}** غير موجود في قائمة الديون.", parse_mode='Markdown')
             
@@ -145,7 +160,7 @@ async def check_customer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             total += float(item['المبلغ'])
             
         msg += f"\n💰 **الصافي المتبقي عليه:** {total}"
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=main_keyboard())
 
     except IndexError:
         await update.message.reply_text("⚠️ يرجى كتابة اسم الزبون، مثال:\n`/check أحمد`", parse_mode='Markdown')
@@ -158,7 +173,7 @@ async def list_debts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         records = debts_sheet.get_all_records()
         
         if not records:
-            await update.message.reply_text("🎉 لا يوجد أي ديون مسجلة حالياً!")
+            await update.message.reply_text("🎉 لا يوجد أي ديون مسجلة حالياً!", reply_markup=main_keyboard())
             return
             
         msg = "📋 **قائمة الديون الإجمالية:**\n\n"
@@ -170,13 +185,12 @@ async def list_debts(update: Update, context: ContextTypes.DEFAULT_TYPE):
             total_all += amount
             
         msg += f"\n💰 **إجمالي الديون للجميع:** {total_all}"
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=main_keyboard())
     except Exception as e:
         await update.message.reply_text(f"❌ حدث خطأ: {e}")
 
-# --- 3. التشغيل ---
+# --- 4. التشغيل ---
 if __name__ == '__main__':
-    # تشغيل خادم الويب في الخلفية
     keep_alive()
     
     TOKEN = "8718346069:AAHWbPMhPLiOMOtM_zGUZZjWg133U5EtyE0"
@@ -188,6 +202,9 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("pay", pay_debt))
     app.add_handler(CommandHandler("check", check_customer))
     app.add_handler(CommandHandler("list", list_debts))
+    
+    # معالج الضغط على الأزرار النصية
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
     
     print("البوت يعمل الآن بالتسميات العربية ومجهّز لـ Render...")
     app.run_polling()
