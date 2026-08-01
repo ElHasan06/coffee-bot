@@ -28,7 +28,6 @@ def get_sheets():
     creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
     client = gspread.authorize(creds)
     
-    # تم التعديل إلى اسم شيت جوجل الخاص بك
     spreadsheet = client.open("كفي الشرفا")
     
     debts_sheet = spreadsheet.worksheet("الديون الإجمالية")
@@ -44,22 +43,25 @@ def main_menu_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# قائمة الأسماء (كل اسم في زر مستقل بعرض الشاشة)
+# قائمة الأسماء (جلب العمود A مباشرة لضمان ظهور جميع الأسماء)
 def build_names_keyboard():
     try:
         debts_sheet, _ = get_sheets()
-        records = debts_sheet.get_all_records()
-        names = [str(rec['الإسم']).strip() for rec in records if str(rec['الإسم']).strip()]
-    except Exception:
+        # جلب كل القيم الموجودة في العمود الأول A
+        col_values = debts_sheet.col_values(1)
+        # استبعاد الترويسة "الاسم" أو "الإسم" والصفوف الفارغة
+        names = [val.strip() for val in col_values if val.strip() and val.strip() not in ["الاسم", "الإسم"]]
+    except Exception as e:
+        print(f"Error fetching names: {e}")
         names = []
 
     keyboard = []
     
-    # وضع كل اسم في صف مفرد (بعرض الشاشة بالكامل)
+    # وضع كل اسم في زر منفصل بعرض الشاشة
     for name in names:
         keyboard.append([KeyboardButton(f"👤 {name}")])
         
-    # زر الرجوع للقائمة الرئيسية بعرض الشاشة
+    # زر الرجوع للقائمة الرئيسية
     keyboard.append([KeyboardButton("🔙 القائمة الرئيسية")])
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -109,17 +111,13 @@ async def add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         debts_sheet, log_sheet = get_sheets()
         log_sheet.append_row([name, item_description, amount, date_str])
 
-        records = debts_sheet.get_all_records()
-        row_index = None
-        current_amount = 0
+        col_values = [v.lower() for v in debts_sheet.col_values(1)]
         
-        for i, rec in enumerate(records, start=2):
-            if str(rec['الاسم']).strip().lower() == name:
-                row_index = i
-                current_amount = float(rec['المبلغ']) if rec['المبلغ'] else 0
-                break
-                
-        if row_index:
+        row_index = None
+        if name in col_values:
+            row_index = col_values.index(name) + 1
+            cell_val = debts_sheet.cell(row_index, 2).value
+            current_amount = float(cell_val) if cell_val else 0.0
             new_amount = current_amount + amount
             debts_sheet.update_cell(row_index, 2, new_amount)
         else:
@@ -144,18 +142,13 @@ async def pay_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         
         debts_sheet, log_sheet = get_sheets()
-        records = debts_sheet.get_all_records()
+        col_values = [v.lower() for v in debts_sheet.col_values(1)]
         
-        row_index = None
-        current_amount = 0
-        
-        for i, rec in enumerate(records, start=2):
-            if str(rec['الاسم']).strip().lower() == name:
-                row_index = i
-                current_amount = float(rec['المبلغ']) if rec['المبلغ'] else 0
-                break
-                
-        if row_index:
+        if name in col_values:
+            row_index = col_values.index(name) + 1
+            cell_val = debts_sheet.cell(row_index, 2).value
+            current_amount = float(cell_val) if cell_val else 0.0
+            
             new_amount = current_amount - amount
             log_sheet.append_row([name, "تسديد دفعة", -amount, date_str])
             
@@ -181,7 +174,7 @@ async def check_customer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         debts_sheet, log_sheet = get_sheets()
         
         logs = log_sheet.get_all_records()
-        customer_logs = [l for l in logs if str(l['الاسم']).strip().lower() == name]
+        customer_logs = [l for l in logs if str(l.get('الاسم', '')).strip().lower() == name]
         
         if not customer_logs:
             await update.message.reply_text(f"❌ لا يوجد أي سجلات أو ديون باسم **{name}**.", parse_mode='Markdown')
@@ -190,8 +183,8 @@ async def check_customer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = f"🔍 **كشف حساب الزبون ({name}):**\n\n"
         total = 0
         for item in customer_logs:
-            msg += f"• {item['الوصف']} | {item['المبلغ']} | ({item['التاريخ']})\n"
-            total += float(item['المبلغ'])
+            msg += f"• {item.get('الوصف', '')} | {item.get('المبلغ', 0)} | ({item.get('التاريخ', '')})\n"
+            total += float(item.get('المبلغ', 0))
             
         msg += f"\n💰 **الصافي المتبقي عليه:** {total}"
         await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=main_menu_keyboard())
@@ -204,19 +197,19 @@ async def check_customer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def list_debts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         debts_sheet, _ = get_sheets()
-        records = debts_sheet.get_all_records()
+        names = debts_sheet.col_values(1)[1:]
+        amounts = debts_sheet.col_values(2)[1:]
         
-        if not records:
+        if not names:
             await update.message.reply_text("🎉 لا يوجد أي ديون مسجلة حالياً!", reply_markup=main_menu_keyboard())
             return
             
         msg = "📋 **قائمة الديون الإجمالية:**\n\n"
         total_all = 0
-        for rec in records:
-            name = rec['الاسم']
-            amount = float(rec['المبلغ']) if rec['المبلغ'] else 0
-            msg += f"• **{name}**: {amount}\n"
-            total_all += amount
+        for n, a in zip(names, amounts):
+            val = float(a) if a else 0.0
+            msg += f"• **{n}**: {val}\n"
+            total_all += val
             
         msg += f"\n💰 **إجمالي الديون للجميع:** {total_all}"
         await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=main_menu_keyboard())
@@ -239,5 +232,5 @@ if __name__ == '__main__':
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
     
-    print("البوت يعمل الآن ومربوط بشيت كفي الشرفا...")
+    print("البوت يعمل الآن بالتحديث المباشر للعمود A...")
     app.run_polling()
