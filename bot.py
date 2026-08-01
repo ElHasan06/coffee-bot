@@ -28,11 +28,10 @@ def get_sheets():
     creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
     client = gspread.authorize(creds)
     
-    # التعديل هنا: تغيير اسم الملف إلى كفي الشرفا
+    # تم التعديل إلى اسم شيت جوجل الخاص بك
     spreadsheet = client.open("كفي الشرفا")
     
-    # تأكد أن اسم ورقة العمل بالأسفل يطابق اسم Tab الورقة في شيت جوجل
-    debts_sheet = spreadsheet.worksheet("الديون الإجمالية") 
+    debts_sheet = spreadsheet.worksheet("الديون الإجمالية")
     log_sheet = spreadsheet.worksheet("سجل الحركات")
     return debts_sheet, log_sheet
 
@@ -117,7 +116,7 @@ async def add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i, rec in enumerate(records, start=2):
             if str(rec['الاسم']).strip().lower() == name:
                 row_index = i
-                current_amount = float(rec['المبلغ'])
+                current_amount = float(rec['المبلغ']) if rec['المبلغ'] else 0
                 break
                 
         if row_index:
@@ -134,7 +133,7 @@ async def add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard()
         )
     except (IndexError, ValueError):
-        await update.message.reply_text("⚠️ طريقة الاستخدام الخاطئة!\nالشكل الصحيح: `/add أحمد 2 كاسة قهوة 10`", parse_mode='Markdown')
+        await update.message.reply_text("⚠️ طريقة الاستخدام الخاطئة!\nالشكل الصحيح: `/add عبود الشرفا 2 كاسة قهوة 10`", parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"❌ حدث خطأ: {e}")
 
@@ -153,7 +152,7 @@ async def pay_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i, rec in enumerate(records, start=2):
             if str(rec['الاسم']).strip().lower() == name:
                 row_index = i
-                current_amount = float(rec['المبلغ'])
+                current_amount = float(rec['المبلغ']) if rec['المبلغ'] else 0
                 break
                 
         if row_index:
@@ -172,7 +171,7 @@ async def pay_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ الزبون **{name}** غير موجود في قائمة الديون.", parse_mode='Markdown')
             
     except (IndexError, ValueError):
-        await update.message.reply_text("⚠️ طريقة الاستخدام الخاطئة!\nالشكل الصحيح: `/pay أحمد 5`", parse_mode='Markdown')
+        await update.message.reply_text("⚠️ طريقة الاستخدام الخاطئة!\nالشكل الصحيح: `/pay عبود الشرفا 5`", parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"❌ حدث خطأ: {e}")
 
@@ -198,7 +197,7 @@ async def check_customer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=main_menu_keyboard())
 
     except IndexError:
-        await update.message.reply_text("⚠️ يرجى كتابة اسم الزبون، مثال:\n`/check أحمد`", parse_mode='Markdown')
+        await update.message.reply_text("⚠️ يرجى كتابة اسم الزبون، مثال:\n`/check عبود الشرفا`", parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"❌ حدث خطأ: {e}")
 
@@ -215,7 +214,7 @@ async def list_debts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_all = 0
         for rec in records:
             name = rec['الاسم']
-            amount = float(rec['المبلغ'])
+            amount = float(rec['المبلغ']) if rec['المبلغ'] else 0
             msg += f"• **{name}**: {amount}\n"
             total_all += amount
             
@@ -240,5 +239,5 @@ if __name__ == '__main__':
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
     
-    print("البوت يعمل الآن بالتسميات العربية ومجهّز لـ Render...")
+    print("البوت يعمل الآن ومربوط بشيت كفي الشرفا...")
     app.run_polling()
