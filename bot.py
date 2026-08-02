@@ -1,6 +1,5 @@
 import os
 import json
-from threading import Thread
 from datetime import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -13,7 +12,6 @@ from telegram.ext import (
     filters,
     ConversationHandler,
 )
-from flask import Flask
 
 # --- مراحل المحادثات (Conversation States) ---
 # إضافة وارد
@@ -27,21 +25,6 @@ PAY_WAITING_FOR_NAME, PAY_WAITING_FOR_AMOUNT, PAY_WAITING_FOR_FROM_WALLET, PAY_W
 
 # إضافة مصروف
 EXPENSE_WAITING_FOR_PERSON, EXPENSE_WAITING_FOR_AMOUNT, EXPENSE_WAITING_FOR_TYPE = range(11, 14)
-
-# --- 0. سيرفر وهمي لتشغيل البوت على Render مجاناً ---
-web_app = Flask('')
-
-@web_app.route('/')
-def home():
-    return "Bot is running online!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    web_app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.start()
 
 # --- 1. الإتصال بجوجل شيت ---
 def get_sheets():
@@ -104,7 +87,7 @@ def main_menu_keyboard():
         [KeyboardButton("➕ إضافة دين")],
         [KeyboardButton("💳 سداد دين")],
         [KeyboardButton("💸 إضافة مصروف")],
-        [KeyboardButton("📊 الإجمالي")] # الزر الجديد المضاف
+        [KeyboardButton("📊 الإجمالي")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -156,13 +139,11 @@ async def cancel_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("تم العودة للقائمة الرئيسية.", reply_markup=main_menu_keyboard())
     return ConversationHandler.END
 
-# --- دالة عرض الإجمالي الجديد ---
+# --- دالة عرض الإجمالي ---
 async def show_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ جاري جلب بيانات الإجمالي...")
     try:
         _, _, _, summary_sheet, _, _ = get_sheets()
-        
-        # جلب النطاق من A1 إلى B5 دفعة واحدة لتقليل طلبات الـ API
         cell_range = summary_sheet.get('A1:B5')
         
         response_text = "📊 **ملخص صفحة الإجمالي:**\n\n"
@@ -194,12 +175,10 @@ async def start_add_income(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def income_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text.strip()
-    
     if name == "🔙 رجوع":
         return await cancel_to_main(update, context)
 
     context.user_data['income_name'] = name
-    
     await update.message.reply_text(
         f"👤 الاسم: **{name}**\n\n💵 أدخل **المبلغ**:",
         parse_mode='Markdown',
@@ -209,7 +188,6 @@ async def income_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def income_process_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
     if text == "🔙 رجوع":
         return await start_add_income(update, context)
 
@@ -229,7 +207,6 @@ async def income_process_amount(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def income_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     income_type = update.message.text.strip()
-    
     if income_type == "🔙 رجوع":
         name = context.user_data.get('income_name', '')
         await update.message.reply_text(
@@ -247,7 +224,6 @@ async def income_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         _, _, _, summary_sheet, _, income_sheet = get_sheets()
-        
         income_sheet.append_row([name, amount, income_type, current_date])
         update_summary_cell(summary_sheet, 'B5', amount)
 
@@ -279,7 +255,6 @@ async def start_add_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
     if text == "🔙 رجوع":
         return await cancel_to_main(update, context)
 
@@ -299,7 +274,6 @@ async def add_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_save_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_name = update.message.text.strip()
-    
     if new_name == "🔙 رجوع":
         return await start_add_debt(update, context)
         
@@ -312,9 +286,7 @@ async def add_save_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         total_sheet, _, _, _, _, _ = get_sheets()
         total_sheet.append_row([new_name, 0])
-        
         await update.message.reply_text(f"✅ تم إضافة الزبون **{new_name}** بنجاح!", parse_mode='Markdown')
-        
         return await start_add_debt(update, context)
     except Exception as e:
         await update.message.reply_text(f"❌ حدث خطأ أثناء إضافة الاسم: {e}", reply_markup=main_menu_keyboard())
@@ -322,7 +294,6 @@ async def add_save_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_process_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
     if text == "🔙 رجوع":
         return await start_add_debt(update, context)
 
@@ -342,7 +313,6 @@ async def add_process_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def add_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     item_type = update.message.text.strip()
-    
     if item_type == "🔙 رجوع":
         name = context.user_data.get('selected_name', '')
         await update.message.reply_text(
@@ -360,7 +330,6 @@ async def add_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         total_sheet, debt_log_sheet, _, summary_sheet, _, _ = get_sheets()
-        
         debt_log_sheet.append_row([name, amount, item_type, current_date])
 
         col_values = [v.lower() for v in total_sheet.col_values(1)]
@@ -407,7 +376,6 @@ async def start_pay_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pay_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
     if text == "🔙 رجوع":
         return await cancel_to_main(update, context)
         
@@ -423,7 +391,6 @@ async def pay_process_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pay_process_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
     if text == "🔙 رجوع":
         return await start_pay_debt(update, context)
 
@@ -443,7 +410,6 @@ async def pay_process_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def pay_process_from_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from_wallet = update.message.text.strip()
-    
     if from_wallet == "🔙 رجوع":
         name = context.user_data.get('selected_name', '')
         await update.message.reply_text(
@@ -454,7 +420,6 @@ async def pay_process_from_wallet(update: Update, context: ContextTypes.DEFAULT_
         return PAY_WAITING_FOR_AMOUNT
 
     context.user_data['from_wallet'] = from_wallet
-
     await update.message.reply_text(
         "✍️ **تم التحويل إلى محفظة؟**\n(أدخل الاسم كتابةً):",
         parse_mode='Markdown',
@@ -464,7 +429,6 @@ async def pay_process_from_wallet(update: Update, context: ContextTypes.DEFAULT_
 
 async def pay_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     to_wallet = update.message.text.strip()
-    
     if to_wallet == "🔙 رجوع":
         await update.message.reply_text(
             "✍️ **تم التحويل من محفظة؟**\n(أدخل الاسم كتابةً):",
@@ -482,7 +446,6 @@ async def pay_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         total_sheet, _, pay_log_sheet, summary_sheet, _, _ = get_sheets()
-        
         pay_log_sheet.append_row([name, amount, from_wallet, to_wallet, current_date])
 
         col_values = [v.lower() for v in total_sheet.col_values(1)]
@@ -534,7 +497,6 @@ async def start_add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def expense_process_person(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
     if text == "🔙 رجوع":
         return await cancel_to_main(update, context)
 
@@ -543,7 +505,6 @@ async def expense_process_person(update: Update, context: ContextTypes.DEFAULT_T
         return EXPENSE_WAITING_FOR_PERSON
 
     context.user_data['expense_person'] = text
-    
     await update.message.reply_text(
         f"👤 الدَافع: **{text}**\n\n💵 كم **مبلغ المصروف**؟",
         parse_mode='Markdown',
@@ -553,7 +514,6 @@ async def expense_process_person(update: Update, context: ContextTypes.DEFAULT_T
 
 async def expense_process_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
     if text == "🔙 رجوع":
         return await start_add_expense(update, context)
 
@@ -573,7 +533,6 @@ async def expense_process_amount(update: Update, context: ContextTypes.DEFAULT_T
 
 async def expense_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expense_type = update.message.text.strip()
-    
     if expense_type == "🔙 رجوع":
         person = context.user_data.get('expense_person', '')
         await update.message.reply_text(
@@ -591,7 +550,6 @@ async def expense_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     try:
         _, _, _, summary_sheet, expenses_sheet, _ = get_sheets()
-        
         expenses_sheet.append_row([person, amount, expense_type, current_date])
 
         if person == "عبود":
@@ -618,8 +576,6 @@ async def expense_save_final(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # --- 8. التشغيل الرئيسي ---
 if __name__ == '__main__':
-    keep_alive()
-    
     TOKEN = "8718346069:AAHWbPMhPLiOMOtM_zGUZZjWg133U5EtyE0"
     
     app = ApplicationBuilder().token(TOKEN).build()
@@ -637,7 +593,7 @@ if __name__ == '__main__':
 
     # محادثة إضافة الدين
     add_debt_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^➕ إضافة دين$"), start_add_debt)],
+        entry_Points=[MessageHandler(filters.Regex("^➕ إضافة دين$"), start_add_debt)],
         states={
             ADD_WAITING_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_process_name)],
             ADD_WAITING_FOR_NEW_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_save_new_name)],
@@ -676,7 +632,7 @@ if __name__ == '__main__':
     app.add_handler(pay_debt_conv)
     app.add_handler(expense_conv)
     
-    # معالج الضغط على زر "الإجمالي"
+    # معالج زر الإجمالي
     app.add_handler(MessageHandler(filters.Regex("^📊 الإجمالي$"), show_summary))
     
     print("البوت يعمل الآن...")
